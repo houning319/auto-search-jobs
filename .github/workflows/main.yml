@@ -1,0 +1,48 @@
+# .github/workflows/daily_job_alert.yml
+# GitHub Actions 每日定时任务 —— 北京时间早8点自动运行
+
+name: 国企招聘日报
+
+on:
+  schedule:
+    # UTC 00:00 = 北京时间 08:00（UTC+8）
+    - cron: "0 0 * * *"
+
+  # 允许在 GitHub Actions 页面手动触发，方便测试
+  workflow_dispatch:
+
+jobs:
+  send-job-alert:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 配置 Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: 安装依赖
+        run: pip install -r requirements.txt
+
+      - name: 运行招聘搜索 & 邮件推送
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SMTP_HOST:         ${{ secrets.SMTP_HOST }}
+          SMTP_PORT:         ${{ secrets.SMTP_PORT }}
+          SMTP_USER:         ${{ secrets.SMTP_USER }}
+          SMTP_PASS:         ${{ secrets.SMTP_PASS }}
+          TARGET_EMAIL:      ${{ secrets.TARGET_EMAIL }}
+        run: python main.py
+
+      - name: 上传运行日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: job-alert-log-${{ github.run_id }}
+          path: job_alert.log
+          retention-days: 14
