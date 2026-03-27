@@ -8,7 +8,8 @@ import anthropic
 import smtplib
 import json
 import logging
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -26,7 +27,52 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
-# ── 1. 搜索国企招聘信息 ────────────────────────────────────────────────────────
+# ── 日期过滤（核心：Python 硬性剔除旧数据）─────────────────────────────────────
+def parse_publish_date(date_str: str) -> datetime | None:
+    """尝试解析各种格式的中文/英文日期字符串"""
+    if not date_str:
+        return None
+    # 常见格式列表
+    patterns = [
+        (r"(\d{4})年(\d{1,2})月(\d{1,2})日", "%Y%m%d"),
+        (r"(\d{4})-(\d{1,2})-(\d{1,2})", "%Y%m%d"),
+        (r"(\d{4})/(\d{1,2})/(\d{1,2})", "%Y%m%d"),
+        (r"(\d{4})\.(\d{1,2})\.(\d{1,2})", "%Y%m%d"),
+    ]
+    for pattern, _ in patterns:
+        m = re.search(pattern, date_str)
+        if m:
+            try:
+                return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            except ValueError:
+                continue
+    return None
+
+
+def filter_recent_jobs(jobs: list[dict], days: int = 35) -> tuple[list[dict], list[dict]]:
+    """
+    将职位分为两组：
+      recent  — 发布日期在 days 天内，或日期解析失败（保留但标注）
+      outdated — 明确是 days 天之前的旧数据
+    返回 (recent, outdated)
+    """
+    cutoff = datetime.now() - timedelta(days=days)
+    recent, outdated = [], []
+    for job in jobs:
+        dt = parse_publish_date(job.get("publish_date", ""))
+        if dt is None:
+            # 日期未知：保留但打上标记，邮件里显示"日期未知"
+            job["publish_date"] = ""
+            job["date_unknown"] = True
+            recent.append(job)
+        elif dt >= cutoff:
+            job["date_unknown"] = False
+            recent.append(job)
+        else:
+            outdated.append(job)
+    return recent, outdated
+
+
 def search_jobs() -> list[dict]:
     """调用 Claude API（联网搜索）获取最新国企招聘信息"""
     log.info("开始搜索国企招聘信息...")
@@ -106,7 +152,17 @@ def search_jobs() -> list[dict]:
         return []
 
     jobs = json.loads(raw_text[start : end + 1])
-    log.info(f"搜索完成，共获取 {len(jobs)} 条职位，其中越南外派 {sum(1 for j in jobs if j.get('vietnam'))} 条")
+    log.info(f"API 原始返回 {len(jobs)} 条")
+
+    # Python 硬性过滤：剔除明确早于35天的旧数据
+    jobs, outdated = filter_recent_jobs(jobs, days=35)
+    log.info(f"过滤掉旧数据 {len(outdated)} 条，保留 {len(jobs)} 条")
+    if outdated:
+        log.info("被过滤的旧职位：" + ", ".join(
+            f"{j.get('title','?')}({j.get('publish_date','?')})" for j in outdated
+        ))
+
+    log.info(f"最终：{len(jobs)} 条职位，其中越南外派 {sum(1 for j in jobs if j.get('vietnam'))} 条")
     return jobs
 
 
@@ -125,7 +181,12 @@ def build_html_email(jobs: list[dict]) -> str:
     def job_card(job: dict, highlight: bool = False) -> str:
         ind_color = industries.get(job.get("industry", "其他"), "#888780")
         border = f"border-left: 4px solid {ind_color};" if highlight else ""
-        date_str = f'<span style="font-size:11px;color:#aaa;margin-left:6px;">发布：{job["publish_date"]}</span>' if job.get("publish_date") else ""
+        if job.get("date_unknown"):
+            date_str = '<span style="font-size:11px;color:#BA7517;background:#FAEEDA;padding:1px 6px;border-radius:3px;margin-left:6px;">发布日期未知</span>'
+        elif job.get("publish_date"):
+            date_str = f'<span style="font-size:11px;color:#aaa;margin-left:6px;">发布：{job["publish_date"]}</span>'
+        else:
+            date_str = ""
         vn_badge = '<span style="background:#E1F5EE;color:#0F6E56;font-size:11px;padding:2px 8px;border-radius:4px;margin-left:6px;font-weight:600;">外派越南</span>' if job.get("vietnam") else ""
         hot_badge = '<span style="background:#FCEBEB;color:#A32D2D;font-size:11px;padding:2px 8px;border-radius:4px;margin-left:4px;">热招</span>' if job.get("hot") else ""
         salary_str = f'<span style="color:#1D9E75;font-weight:600;">{job["salary"]}</span> · ' if job.get("salary") else ""
