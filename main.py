@@ -33,34 +33,52 @@ def search_jobs() -> list[dict]:
     client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
     today = datetime.now().strftime("%Y年%m月%d日")
 
-    prompt = f"""今天是{today}。请通过网络搜索最新的中国国有企业（国企/央企）招聘信息，
-特别重点关注外派越南的职位机会。
+    one_month_ago = datetime.now().replace(day=1).strftime("%Y年%m月%d日")
+    year = datetime.now().year
+    month = datetime.now().month
+    prompt = f"""今天是{today}。请通过网络搜索【最近一个月内（{one_month_ago}之后发布）】的中国国有企业（国企/央企）招聘信息。
 
-搜索关键词方向（逐一搜索）：
-1. 国企招聘 外派越南 {datetime.now().year}
-2. 央企越南项目 招聘
-3. 中交股份 越南 招聘
-4. 中国电建 越南 招聘
-5. 中铁 越南 工程项目 招聘
-6. 中建 越南 海外项目 职位
-7. 国家电网 越南 外派
-8. 华为中兴 越南 招聘（含国企背景）
-9. 中国银行 越南 招聘
-10. 国企海外招聘 越南 胡志明市 河内
+⚠️ 严格要求：只收录 {one_month_ago} 之后发布的职位，过期或日期不明的一律排除。
 
-请整理出12-18条招聘信息，以如下JSON数组格式返回，不要包含任何其他文字：
+搜索方向（请逐一搜索，优先取最新结果）：
+
+【平台定向搜索】
+1. site:zhaopin.com 国企 越南 外派 {year}
+2. site:51job.com 央企 越南 {year}
+3. site:liepin.com 国企 海外 越南 {year}
+4. site:boss.zhipin.com 国企 外派越南 {year}
+
+【企业定向搜索】
+5. （招商局 OR 中远海运 OR 中外运 OR 航运 OR 物流 OR 船公司）越南 招聘 {year}年{month}月
+6. （中交股份 OR 中国电建 OR 中铁建 OR 中建集团）越南 招聘 {year}年{month}月
+7. （国家电网 OR 南方电网 OR 中国能建）越南 外派 {year}
+8. （中国银行 OR 工商银行 OR 建设银行 OR 农业银行）越南 分行 招聘 {year}
+9. （华为 OR 中兴通讯 OR 中国移动 OR 中国电信）越南 招聘 {year}
+
+【地点定向搜索】
+10. 国企 招聘 越南 （河内 OR 胡志明市 OR 海防）{year}年
+11. 央企 越南 工程项目 外派 {year}年{month}月
+
+【行业定向搜索】
+12. 能源电力 国企 越南 招聘 最新 {year}
+13. 建筑工程 央企 越南EPC项目 招聘 {year}
+14. 交通运输 国企 越南 外派 {year}
+15. 制造业 国企 越南 工厂 招聘 {year}
+
+请将结果按行业分类整理，每个行业至少2条，共15-20条，以JSON数组格式返回（不含任何其他文字）：
 [
   {{
     "title": "职位名称",
-    "company": "企业全称（如中国交通建设股份有限公司）",
-    "company_short": "简称（如中交股份）",
-    "location": "工作地点（如越南河内、越南胡志明市）",
-    "industry": "行业（能源|建筑|通信|金融|交通|制造|其他）",
+    "company": "企业全称",
+    "company_short": "简称",
+    "location": "工作地点",
+    "industry": "行业（只能是：能源电力|建筑工程|通信科技|金融银行|交通物流|制造业|其他）",
     "vietnam": true或false,
-    "salary": "薪资描述（若无则空字符串）",
+    "publish_date": "发布日期（如2025年3月15日，不确定则填空字符串）",
+    "salary": "薪资（若无则空字符串）",
     "requirements": "主要要求（30字内）",
     "deadline": "截止日期（若无则空字符串）",
-    "source": "来源平台（如智联招聘/前程无忧/官网等）",
+    "source": "来源平台",
     "url": "职位链接（若有）",
     "hot": true或false,
     "desc": "职位简介（40字内）"
@@ -100,13 +118,14 @@ def build_html_email(jobs: list[dict]) -> str:
     other_jobs = [j for j in jobs if not j.get("vietnam")]
 
     industries = {
-        "能源": "#1D9E75", "建筑": "#378ADD", "通信": "#7F77DD",
-        "金融": "#D4537E", "交通": "#BA7517", "制造": "#639922", "其他": "#888780",
+        "能源电力": "#1D9E75", "建筑工程": "#378ADD", "通信科技": "#7F77DD",
+        "金融银行": "#D4537E", "交通物流": "#BA7517", "制造业": "#639922", "其他": "#888780",
     }
 
     def job_card(job: dict, highlight: bool = False) -> str:
         ind_color = industries.get(job.get("industry", "其他"), "#888780")
         border = f"border-left: 4px solid {ind_color};" if highlight else ""
+        date_str = f'<span style="font-size:11px;color:#aaa;margin-left:6px;">发布：{job["publish_date"]}</span>' if job.get("publish_date") else ""
         vn_badge = '<span style="background:#E1F5EE;color:#0F6E56;font-size:11px;padding:2px 8px;border-radius:4px;margin-left:6px;font-weight:600;">外派越南</span>' if job.get("vietnam") else ""
         hot_badge = '<span style="background:#FCEBEB;color:#A32D2D;font-size:11px;padding:2px 8px;border-radius:4px;margin-left:4px;">热招</span>' if job.get("hot") else ""
         salary_str = f'<span style="color:#1D9E75;font-weight:600;">{job["salary"]}</span> · ' if job.get("salary") else ""
@@ -116,7 +135,7 @@ def build_html_email(jobs: list[dict]) -> str:
           <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:4px;">
             <div>
               <span style="font-size:15px;font-weight:600;color:#1a1a1a;">{job.get('title','—')}</span>
-              {vn_badge}{hot_badge}
+              {vn_badge}{hot_badge}{date_str}
             </div>
             <span style="font-size:11px;background:{ind_color}1a;color:{ind_color};padding:2px 8px;border-radius:4px;font-weight:500;">{job.get('industry','—')}</span>
           </div>
@@ -136,7 +155,26 @@ def build_html_email(jobs: list[dict]) -> str:
 
     vn_section = "".join(job_card(j, highlight=True) for j in vn_jobs) if vn_jobs else \
         '<p style="color:#888;font-size:14px;padding:12px;">今日暂无外派越南相关职位，明日继续关注。</p>'
-    other_section = "".join(job_card(j) for j in other_jobs)
+    # 按行业分组
+    industry_order = ["能源电力", "建筑工程", "通信科技", "金融银行", "交通物流", "制造业", "其他"]
+    industry_groups = {}
+    for j in other_jobs:
+        ind = j.get("industry", "其他")
+        industry_groups.setdefault(ind, []).append(j)
+
+    industry_sections = ""
+    for ind in industry_order:
+        group = industry_groups.get(ind, [])
+        if not group:
+            continue
+        color = industries.get(ind, "#888780")
+        industry_sections += f"""
+        <div style="margin-bottom:6px;">
+          <div style="font-size:12px;font-weight:600;color:{color};padding:6px 0 8px;border-bottom:1px solid #f0f0f0;margin-bottom:8px;">
+            ▌ {ind}（{len(group)} 条）
+          </div>
+          {"".join(job_card(j) for j in group)}
+        </div>"""
 
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -179,9 +217,9 @@ def build_html_email(jobs: list[dict]) -> str:
     <!-- 其他职位 -->
     <div style="background:#fff;padding:20px 20px 10px;margin-top:2px;">
       <div style="font-size:14px;font-weight:600;color:#333;margin-bottom:12px;">
-        📋 国内及其他海外职位（{len(other_jobs)} 条）
+        📋 按行业分类（{len(other_jobs)} 条）
       </div>
-      {other_section}
+      {industry_sections}
     </div>
 
     <!-- 底部 -->
