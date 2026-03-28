@@ -73,101 +73,187 @@ def filter_recent_jobs(jobs: list[dict], days: int = 35) -> tuple[list[dict], li
     return recent, outdated
 
 
-def search_jobs() -> list[dict]:
-    """调用 Claude API（联网搜索）获取最新国企招聘信息"""
+def search_jobs() -> tuple[list[dict], dict]:
+    """调用 Claude API（联网搜索）获取最新国企招聘信息，同时返回搜索覆盖情况"""
     log.info("开始搜索国企招聘信息...")
     client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
     today = datetime.now().strftime("%Y年%m月%d日")
-
     one_month_ago = datetime.now().replace(day=1).strftime("%Y年%m月%d日")
     year = datetime.now().year
     month = datetime.now().month
-    prompt = f"""今天是{today}。请通过网络搜索【最近一个月内（{one_month_ago}之后发布）】的中国国有企业（国企/央企）招聘信息。
 
-⚠️ 严格要求：只收录 {one_month_ago} 之后发布的职位，过期或日期不明的一律排除。
+    # 搜索方向定义（用于覆盖率报告）
+    search_directions = {
+        "D01": "平台·智联招聘 国企越南外派",
+        "D02": "平台·前程无忧 央企越南",
+        "D03": "平台·猎聘 国企海外越南",
+        "D04": "平台·BOSS直聘 国企外派越南",
+        "D05": "企业·招商局/中远海运/中外运/航运物流",
+        "D06": "企业·中交/电建/中铁建/中建 越南",
+        "D07": "企业·国家电网/南方电网/中国能建 越南",
+        "D08": "企业·中行/工行/建行/农行 越南分行",
+        "D09": "企业·华为/中兴/中国移动/电信 越南",
+        "D10": "地点·越南河内/胡志明市/海防",
+        "D11": "地点·央企越南工程项目外派",
+        "D12": "行业·能源电力国企越南",
+        "D13": "行业·建筑工程央企越南EPC",
+        "D14": "行业·交通运输国企越南",
+        "D15": "行业·制造业国企越南工厂",
+    }
 
-搜索方向（请逐一搜索，优先取最新结果）：
+    prompt = f"""今天是{today}。请通过网络搜索【最近一个月内（{one_month_ago}之后发布）】的中国国有企业招聘信息。
+⚠️ 只收录{one_month_ago}之后发布的职位，过期或日期不明的排除。
+
+请按以下15个方向逐一搜索，并记录每个方向是否找到有效结果：
 
 【平台定向搜索】
-1. site:zhaopin.com 国企 越南 外派 {year}
-2. site:51job.com 央企 越南 {year}
-3. site:liepin.com 国企 海外 越南 {year}
-4. site:boss.zhipin.com 国企 外派越南 {year}
+D01. site:zhaopin.com 国企 越南 外派 {year}
+D02. site:51job.com 央企 越南 {year}
+D03. site:liepin.com 国企 海外 越南 {year}
+D04. site:boss.zhipin.com 国企 外派越南 {year}
 
 【企业定向搜索】
-5. （招商局 OR 中远海运 OR 中外运 OR 航运 OR 物流 OR 船公司）越南 招聘 {year}年{month}月
-6. （中交股份 OR 中国电建 OR 中铁建 OR 中建集团）越南 招聘 {year}年{month}月
-7. （国家电网 OR 南方电网 OR 中国能建）越南 外派 {year}
-8. （中国银行 OR 工商银行 OR 建设银行 OR 农业银行）越南 分行 招聘 {year}
-9. （华为 OR 中兴通讯 OR 中国移动 OR 中国电信）越南 招聘 {year}
+D05. （招商局 OR 中远海运 OR 中外运 OR 航运 OR 物流 OR 船公司）越南 招聘 {year}年{month}月
+D06. （中交股份 OR 中国电建 OR 中铁建 OR 中建集团）越南 招聘 {year}年{month}月
+D07. （国家电网 OR 南方电网 OR 中国能建）越南 外派 {year}
+D08. （中国银行 OR 工商银行 OR 建设银行 OR 农业银行）越南 分行 招聘 {year}
+D09. （华为 OR 中兴通讯 OR 中国移动 OR 中国电信）越南 招聘 {year}
 
 【地点定向搜索】
-10. 国企 招聘 越南 （河内 OR 胡志明市 OR 海防）{year}年
-11. 央企 越南 工程项目 外派 {year}年{month}月
+D10. 国企 招聘 越南 （河内 OR 胡志明市 OR 海防）{year}年
+D11. 央企 越南 工程项目 外派 {year}年{month}月
 
 【行业定向搜索】
-12. 能源电力 国企 越南 招聘 最新 {year}
-13. 建筑工程 央企 越南EPC项目 招聘 {year}
-14. 交通运输 国企 越南 外派 {year}
-15. 制造业 国企 越南 工厂 招聘 {year}
+D12. 能源电力 国企 越南 招聘 最新 {year}
+D13. 建筑工程 央企 越南EPC项目 招聘 {year}
+D14. 交通运输 国企 越南 外派 {year}
+D15. 制造业 国企 越南 工厂 招聘 {year}
 
-请将结果按行业分类整理，每个行业至少2条，共15-20条，以JSON数组格式返回（不含任何其他文字）：
-[
-  {{
-    "title": "职位名称",
-    "company": "企业全称",
-    "company_short": "简称",
-    "location": "工作地点",
-    "industry": "行业（只能是：能源电力|建筑工程|通信科技|金融银行|交通物流|制造业|其他）",
-    "vietnam": true或false,
-    "publish_date": "发布日期（如2025年3月15日，不确定则填空字符串）",
-    "salary": "薪资（若无则空字符串）",
-    "requirements": "主要要求（30字内）",
-    "deadline": "截止日期（若无则空字符串）",
-    "source": "来源平台",
-    "url": "职位链接（若有）",
-    "hot": true或false,
-    "desc": "职位简介（40字内）"
-  }}
-]"""
+搜索完毕后，请汇总所有结果，整理成招聘信息列表。"""
 
-    response = client.messages.create(
+    # 第一步：联网搜索
+    log.info("第一步：联网搜索招聘信息...")
+    search_response = client.messages.create(
         model="claude-opus-4-5",
         max_tokens=4096,
         tools=[{"type": "web_search_20250305", "name": "web_search"}],
         messages=[{"role": "user", "content": prompt}],
     )
 
-    # 提取 JSON
+    search_text = ""
+    for block in search_response.content:
+        if hasattr(block, "type") and block.type == "text":
+            search_text += block.text
+
+    if not search_text.strip():
+        log.warning("第一步搜索无返回文本")
+        return [], {d: False for d in search_directions}
+
+    log.info(f"第一步完成，获取到 {len(search_text)} 字符的搜索结果")
+
+    # 第二步：格式化为结构化 JSON（含职位列表 + 搜索覆盖情况）
+    log.info("第二步：格式化为 JSON...")
+    format_prompt = f"""请将以下国企招聘搜索结果整理为结构化JSON。
+
+只输出一个JSON对象，不要任何说明文字，不要```代码块标记，格式如下：
+{{
+  "jobs": [
+    {{
+      "title": "职位名称",
+      "company": "企业全称",
+      "company_short": "简称",
+      "location": "工作地点",
+      "industry": "能源电力|建筑工程|通信科技|金融银行|交通物流|制造业|其他（只能选其一）",
+      "vietnam": true,
+      "publish_date": "发布日期如2026年3月20日，不确定填空字符串",
+      "salary": "薪资或空字符串",
+      "requirements": "主要要求30字内",
+      "deadline": "截止日期或空字符串",
+      "source": "来源平台",
+      "url": "链接或空字符串",
+      "hot": false,
+      "desc": "职位简介40字内",
+      "search_direction": "来自哪个搜索方向，如D05或D12"
+    }}
+  ],
+  "coverage": {{
+    "D01": true,
+    "D02": false,
+    "D03": true,
+    "D04": false,
+    "D05": true,
+    "D06": true,
+    "D07": false,
+    "D08": true,
+    "D09": false,
+    "D10": true,
+    "D11": true,
+    "D12": false,
+    "D13": true,
+    "D14": false,
+    "D15": true
+  }}
+}}
+
+说明：
+- jobs：只保留{one_month_ago}之后发布的职位，过期排除
+- coverage：每个方向true=找到有效结果，false=无结果或全是旧数据
+- search_direction：每条职位标注来自哪个搜索方向编号
+
+原始搜索结果：
+{search_text[:6000]}
+
+输出第一个字符必须是 {{"""
+
+    format_response = client.messages.create(
+        model="claude-opus-4-5",
+        max_tokens=4096,
+        messages=[{"role": "user", "content": format_prompt}],
+    )
+
     raw_text = ""
-    for block in response.content:
-        if block.type == "text":
+    for block in format_response.content:
+        if hasattr(block, "type") and block.type == "text":
             raw_text += block.text
 
-    # 解析 JSON 数组
-    start = raw_text.find("[")
-    end = raw_text.rfind("]")
+    log.info(f"第二步返回内容前150字符：{raw_text[:150]}")
+
+    # 解析 JSON 对象
+    raw_text = raw_text.strip().replace("```json", "").replace("```", "").strip()
+    start = raw_text.find("{")
+    end = raw_text.rfind("}")
     if start == -1 or end == -1:
-        log.warning("未能从响应中找到 JSON 数组，返回空列表")
-        return []
+        log.warning(f"未找到JSON对象，内容：{raw_text[:200]}")
+        return [], {d: False for d in search_directions}
 
-    jobs = json.loads(raw_text[start : end + 1])
-    log.info(f"API 原始返回 {len(jobs)} 条")
+    parsed = json.loads(raw_text[start : end + 1])
+    jobs = parsed.get("jobs", [])
+    coverage_raw = parsed.get("coverage", {})
 
-    # Python 硬性过滤：剔除明确早于35天的旧数据
+    # 合并覆盖情况，补充描述文字
+    coverage = {
+        code: {"label": label, "found": bool(coverage_raw.get(code, False))}
+        for code, label in search_directions.items()
+    }
+
+    log.info(f"API 原始返回 {len(jobs)} 条职位")
+    hit_count = sum(1 for v in coverage.values() if v["found"])
+    log.info(f"搜索覆盖：{hit_count}/15 个方向有结果")
+
+    # Python 硬性过滤旧数据
     jobs, outdated = filter_recent_jobs(jobs, days=35)
-    log.info(f"过滤掉旧数据 {len(outdated)} 条，保留 {len(jobs)} 条")
+    log.info(f"过滤旧数据 {len(outdated)} 条，保留 {len(jobs)} 条")
     if outdated:
-        log.info("被过滤的旧职位：" + ", ".join(
+        log.info("被过滤：" + ", ".join(
             f"{j.get('title','?')}({j.get('publish_date','?')})" for j in outdated
         ))
 
-    log.info(f"最终：{len(jobs)} 条职位，其中越南外派 {sum(1 for j in jobs if j.get('vietnam'))} 条")
-    return jobs
+    log.info(f"最终：{len(jobs)} 条，越南外派 {sum(1 for j in jobs if j.get('vietnam'))} 条")
+    return jobs, coverage
 
 
 # ── 2. 生成 HTML 邮件内容 ──────────────────────────────────────────────────────
-def build_html_email(jobs: list[dict]) -> str:
+def build_html_email(jobs: list[dict], coverage: dict) -> str:
     """将职位列表渲染为精美 HTML 邮件"""
     today_str = datetime.now().strftime("%Y年%m月%d日")
     vn_jobs = [j for j in jobs if j.get("vietnam")]
@@ -237,6 +323,50 @@ def build_html_email(jobs: list[dict]) -> str:
           {"".join(job_card(j) for j in group)}
         </div>"""
 
+    # 搜索覆盖率区块
+    hit = sum(1 for v in coverage.values() if v["found"])
+    total = len(coverage)
+    pct = round(hit / total * 100) if total else 0
+
+    def cov_row(code: str, info: dict) -> str:
+        found = info["found"]
+        icon = "✓" if found else "—"
+        bg = "#E1F5EE" if found else "#F5F4F0"
+        color = "#0F6E56" if found else "#aaa"
+        return (
+            f'<tr>'
+            f'<td style="padding:5px 8px;font-size:12px;color:#555;border-bottom:0.5px solid #f0f0f0;">'
+            f'<span style="font-family:monospace;font-size:11px;color:#aaa;margin-right:6px;">{code}</span>'
+            f'{info["label"]}</td>'
+            f'<td style="padding:5px 8px;text-align:center;border-bottom:0.5px solid #f0f0f0;">'
+            f'<span style="background:{bg};color:{color};font-size:11px;padding:2px 8px;border-radius:4px;font-weight:600;">{icon}</span>'
+            f'</td></tr>'
+        )
+
+    coverage_rows = "".join(cov_row(k, v) for k, v in coverage.items())
+    coverage_section = f"""
+    <div style="background:#fff;padding:20px 20px 16px;margin-top:2px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <div style="font-size:14px;font-weight:600;color:#333;">📡 搜索覆盖报告</div>
+        <div style="font-size:13px;">
+          <span style="color:#1D9E75;font-weight:600;">{hit}</span>
+          <span style="color:#aaa;">/{total} 个方向有结果（{pct}%）</span>
+        </div>
+      </div>
+      <table style="width:100%;border-collapse:collapse;">
+        <thead>
+          <tr style="background:#F5F4F0;">
+            <th style="padding:6px 8px;font-size:11px;color:#888;text-align:left;font-weight:500;">搜索方向</th>
+            <th style="padding:6px 8px;font-size:11px;color:#888;text-align:center;font-weight:500;width:60px;">结果</th>
+          </tr>
+        </thead>
+        <tbody>{coverage_rows}</tbody>
+      </table>
+      <div style="margin-top:10px;font-size:11px;color:#bbb;">
+        ✓ = 找到有效职位 &nbsp;|&nbsp; — = 无结果或全为旧数据
+      </div>
+    </div>"""
+
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
@@ -257,31 +387,34 @@ def build_html_email(jobs: list[dict]) -> str:
           <div style="color:#888;font-size:11px;">职位总数</div>
         </div>
         <div style="text-align:center;">
-          <div style="color:#85B7EB;font-size:24px;font-weight:700;">{len({j.get('company_short') or j.get('company') for j in jobs})}</div>
+          <div style="color:#85B7EB;font-size:24px;font-weight:700;">{len({{j.get('company_short') or j.get('company') for j in jobs}})}</div>
           <div style="color:#888;font-size:11px;">招聘企业</div>
         </div>
         <div style="text-align:center;">
-          <div style="color:#FAC775;font-size:24px;font-weight:700;">{len({j.get('industry') for j in jobs})}</div>
-          <div style="color:#888;font-size:11px;">覆盖行业</div>
+          <div style="color:#FAC775;font-size:24px;font-weight:700;">{hit}/{total}</div>
+          <div style="color:#888;font-size:11px;">搜索命中</div>
         </div>
       </div>
     </div>
 
     <!-- 越南专区 -->
     <div style="background:#fff;padding:20px 20px 10px;border-top:3px solid #1D9E75;">
-      <div style="font-size:14px;font-weight:600;color:#0F6E56;margin-bottom:12px;display:flex;align-items:center;gap:6px;">
+      <div style="font-size:14px;font-weight:600;color:#0F6E56;margin-bottom:12px;">
         🌏 外派越南专项职位（{len(vn_jobs)} 条）
       </div>
       {vn_section}
     </div>
 
-    <!-- 其他职位 -->
+    <!-- 行业分类 -->
     <div style="background:#fff;padding:20px 20px 10px;margin-top:2px;">
       <div style="font-size:14px;font-weight:600;color:#333;margin-bottom:12px;">
         📋 按行业分类（{len(other_jobs)} 条）
       </div>
       {industry_sections}
     </div>
+
+    <!-- 搜索覆盖报告 -->
+    {coverage_section}
 
     <!-- 底部 -->
     <div style="background:#F5F4F0;padding:16px;text-align:center;border-radius:0 0 8px 8px;">
@@ -325,14 +458,14 @@ def main():
     log.info("=" * 50)
 
     # 搜索职位
-    jobs = search_jobs()
+    jobs, coverage = search_jobs()
     if not jobs:
         log.error("未获取到任何招聘信息，任务终止")
         return
 
     # 生成邮件
     vn_jobs = [j for j in jobs if j.get("vietnam")]
-    html = build_html_email(jobs)
+    html = build_html_email(jobs, coverage)
 
     # 发送
     success = send_email(html, len(jobs), len(vn_jobs))
